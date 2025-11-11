@@ -1,0 +1,1401 @@
+#!/bin/bash
+# shell脚本调用的函数
+# by f-jx
+
+# 为grep等单线程的命令提供多线程支持
+    # [ -e /tmp/fd11 ] || mkfifo /tmp/fd11;exec 9<>/tmp/fd11;rm /tmp/fd11;for ((i=1;i<=20;i++));do echo >&9;done
+# awk读取csv：awk -v FPAT='[^,]*|"[^"]*"'
+# 函数要考虑几个点：
+    # 1 局部变量必须定义好
+    # 2 是否需要提前创建目录路径
+    # 3 是否应该保存中间文件？循环的源文件如果删除，是否会影响该函数结果？
+    # 4 根据什么条件判定跳过该步骤，节省时间
+    # 5 for i in `ls *.gz`; 不要直接写 in *.gz; 如果通配符没有扩展，会多出一个*.gz进入循环
+    # 6 根据参数判断时需考虑参数是否存在，判断参数是否存在[ ! ${1} ]要写前面，否则会报错
+    # 7 注意！：所有带*,?等会被bash扩展的字符或空格的变量，在传入或者使用的时候必须考虑用引号括起来
+    # 8 在同一条命令中写入不同参数: echo "XXX#kkk#XXX" | sed 's/#\+[^#]*#\+//g' | bash
+    # 9 或者把参数定义成局部变量
+    # 10 多个逻辑判断且不带括号时，会把后面的看作整体来执行：aa || bb && cc || dd; 相当于 aa || (bb && (cc || dd))
+# 注意多个逻辑运算符串联：true || false && echo ddd 不同于 true || (false && echo ddd)
+# 以下代码只能用于普通bash，在slurm脚本中反而会进入/var/xxx下，slurm必须指定工作路径，或者直接到路径下执行
+    # cd $(dirname $(readlink -f $0))
+    # cd $(dirname $(realpath $0))
+    # source $(dirname $(readlink -f $0))/bioFunction.sh.bak
+
+# 所需的conda环境及包：
+    # default: -c bioconda rsem star bowtie2=2.4.5 fastp=0.23.2 samtools=1.15 kraken2=2.1.2 bedtools=2.30.0 deeptools=3.5.1 macs2=2.2.7.1 homer jq seqkit snpeff bedops vcftools plink megahit spades metaphlan
+        # python3 -m pip install --upgrade ATACFragQC
+    # r: r-rvcheck r-devtools r-tidyverse r-ggpubr r-ggpmisc r-stringr r-scales r-ggsci r-pheatmap r-ggrepel r-systemfonts r-languageserver r-recommended r-irkernel r-remotes r-qqman r-httpgd r-ggseqlogo
+    #     bioconductor: -c bioconda bioconductor-clusterprofiler bioconductor-chipseeker bioconductor-genomicfeatures bioconductor-org.hs.eg.db bioconductor-org.Mm.eg.db bioconductor-diffbind bioconductor-tximport bioconductor-pathview bioconductor-atacseqqc
+    # beta多样性PCoA包：devtools::install_github('microbiota/amplicon')
+    # BiocManager::install(c("TxDb.Mmusculus.UCSC.mm10.knownGene","TxDb.Hsapiens.UCSC.hg38.knownGene","TxDb.Mmusculus.UCSC.mm39.knownGene"))
+    # singlecellR包: r-cairo r-seurat r-clustree -c austintwang r-archr -c bioconda r-signac r-hdf5r bioconductor-glmgampoi bioconductor-biovizbase r-harmony bioconductor-monocle presto bioconductor-ensdb.mmusculus.v79 bioconductor-bsgenome.mmusculus.ucsc.mm10
+        # signac的TSSEnrichment、计算线粒体比例报错：remotes::install_github("stuart-lab/signac", ref="develop")
+        # harmony报错：devtools::install_github("eddelbuettel/harmony",force = TRUE)；https://mp.weixin.qq.com/s/Q1LA_jGEsfWeCm-Uk4ZjGA
+        # install.packages(c('devtools','remotes',"BiocManager"))
+        # devtools::install_github('immunogenomics/presto')
+        # BiocManager::install(c("SingleR","celldex"))  # 需要外网下载注释数据库
+        # -c bioturing r-doubletfinder 会有冲突，只好进R安装
+        # remotes::install_github('chris-mcginnis-ucsf/DoubletFinder')
+        # -c bioturing -c bioconda cellphonedb  安装在py环境下
+    # meta 孟德尔随机化MR R包：r-meta r-coloc -c joonatan r-twosamplemr r-mrinstruments -c nclibz r-mendelianrandomization 会有冲突，只好进R安装
+        # install.packages(c('meta','metasens','epigraphdb','MendelianRandomization'))
+        # remotes::install_github("MRCIEU/TwoSampleMR")
+        # devtools::install_github("MRCIEU/MRInstruments")
+        # SMR绘图需要：r-teachingdemos -c bioconda bioconductor-variantannotation
+        # 共定位：devtools::install_github(c("mrcieu/gwasglue","jrs95/gassocplot"))
+    # windows下若直接安装R则需要先安装rtools，若通过conda安装r就不需要rtools
+        # windows下没有的包：r-httpgd r-mrinstruments，httpgd可在R内部安装；要更改chanel的：-c dnachun -c sk_test r-twosamplemr r-mendelianrandomization
+        # windows下在VScode调用R需要将R写进环境变量中：;B:\\miniforge3\\envs\\r;B:\\miniforge3\\envs\\r\\Scripts;B:\\miniforge3\\envs\\r\\Library\\bin;B:\\miniforge3\\envs\\r\\Library\\mingw-w64\\bin;
+    # py: -c pytorch pytorch torchvision biopython numpy pandas scipy scikit-learn xgboost matplotlib seaborn fastcluster ipykernel jupyterlab requests-html selenium beautifulsoup4 wordcloud openpyxl lxml ta-lib
+    # py股票相关：pip install akshare stockstats baostock
+    # ncbi: -c bioconda sra-tools ncbi-datasets-cli
+    # test: 一些做测试但还没准备写进pipeline的放这里
+    # 单独安装: picard.jar cellranger cellranger-atac gatk qiime rsem STAR
+    # R，python绘图中文显示，python绘图问题很大
+    # R中文支持：https://www.runoob.com/r/r-charts-cn.html
+# 用读取标准输入(管道,重定向,命令执行结果等)的方式代替循环；若作为参数传入，需加双引号防止被bash展开
+# 用法：cat file.txt | READ_STDIN; cat file.txt | READ_STDIN -; READ_STDIN "file content";
+READ_STDIN(){
+    local i j k
+    if [ ! -t 0 ];then while read line;do j+=("$line");done;fi
+    if  [ -n "$1" ] && [ "$1" != "-" ];then j=("$1");fi
+    for k in "${j[@]}";do echo "$k";done
+}
+
+# cat file.txt(referenceFasta prefix) | BOWTIE2_BUILD threads
+BOWTIE2_BUILD(){
+    local array line i threads
+    while read line;do array+=("$line");done
+    for i in "${array[@]}";do
+        echo bowtie2-build $i
+        bowtie2-build --threads $1 $i
+    done
+}
+
+# FASTP fq/raw fq/fastp $peFq1suffix $seFqsuffix merge/fq.fastp.xls $threads
+# 双端reads按对计数。
+FASTP(){
+    [ -d $1 ] || return 1
+    echo FASTP $1 $2
+    local fq sample param js threads
+    threads=$6
+    [ -d $2 ] || mkdir $2 -p
+    [ -d $(dirname "$5") ] || mkdir $(dirname "$5") -p
+    for fq in `ls $1/*.gz`;do
+        if [ ! ${fq##*$3} ];then
+            sample=$(basename ${fq%$3})
+            param="--detect_adapter_for_pe -o $2/$sample.1.gz \
+                -I $1/$sample${3/1/2} -O $2/$sample.2.gz"
+        elif [ ${fq##*${3/1/2}} ] && [ ! ${fq##*$4} ];then
+            sample=$(basename ${fq%$4})
+            param="-o $2/$sample.gz"
+        else continue
+        fi
+        [ -s $2/$sample.json ] || \
+        fastp -w $threads -i $fq $param 2>$2/$sample.log \
+        -j $2/$sample.json -h $2/$sample.html
+    done
+    for js in `ls $2/*.json`;do
+        sample=$(basename ${js%.json})
+        jq -r '.summary.sequencing,
+            .read1_before_filtering.total_reads,
+            .read1_after_filtering.total_reads,
+            .duplication.rate,
+            .adapter_cutting.adapter_trimmed_reads,
+            .summary.after_filtering.q20_rate,
+            .summary.after_filtering.q30_rate' $js | \
+        tr '\n' '\t' | sed "{s#^#$sample\t#;s#\$#\n#}" >$js.tmp
+    done
+    awk 'BEGIN{FS=OFS="\t"}NR==1{print "sample\tsequencing\tReadsBeforeFilt\tReadsAfterFilt\tdupRate\tReadsAdapterTrimmed\tQ20RateAfterFilt\tQ30RateAfterFilt"}
+        {sub("null","0",$6);print $0}' $2/*.json.tmp > $5 && rm $2/*.json.tmp
+}
+
+# awk实现行列转换
+# MERGE_FASTP_HTML "fq/fastp/*.html" merge/fq.fastp.xls
+MERGE_FASTP_HTML(){
+    local fphtml sample
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    for fphtml in `ls $1`;do
+        sample=$(basename ${fphtml%${1#*\*}})
+        sed -n '/sequencing:\|mean length\|duplication rate:\|total bases:\|Q20\|Q30/p' $fphtml| \
+        sed -e 's#<[^<>]*>##g' -e '5,7d' -e "1isample\t$sample" -e 's/:/\t/g' >$fphtml.tmp
+        grep 'read1_after_filtering' -A1 ${fphtml/html/json} | \
+        sed -n '2s/[^0-9a-z_:]//gp' | sed -e 's/:/\t/' -e 's/_/ /'>>$fphtml.tmp
+    done
+    ls $1.tmp >/dev/null 2>&1 && paste $1.tmp|awk 'BEGIN{FS=OFS="\t"}
+        {for(i=3;i<NF;i+=2) $i="";print $0}'|sed 's#\t\t#\t#g'| \
+    awk 'BEGIN{FS="\t"}{
+        for(i=1;i<=NF;i++)a[NR,i]=$i}END{
+            for(j=1;j<=NF;j++){
+                for(k=1;k<=NR;k++){printf a[k,j]"\t"};printf "\n"}
+            }' > ${2} && rm $1.tmp
+}
+
+# RSEM fq/fastp rsemMap/host .1.gz .gz rsemIndex/$host bowtie2/star ffna gtf merge/fq.map.xls merge/geneExpression $threads
+RSEM(){
+    [ -d $1 ] || return 1
+    echo RSEM $1 $2 INDEX $5 METHOD $6
+    local anot fq sample threads stargz param out
+    threads=${11}
+    [ -d $(dirname "$5") ] || mkdir $(dirname "$5") -p  # rsem创建索引最后是一个前缀，需要创建上游路径
+    anot="--gtf $8"; [ ${8##*.gtf} ] && anot="--gff3-genes-as-transcripts --gff3 $8"
+    [ -s $5.log ] || rsem-prepare-reference --$6 -p $threads $anot $7 $5 >$5.log
+    [ -d $2 ] || mkdir $2 -p
+    [ $6 == 'star' ] && stargz='--star-gzipped-read-file'
+    for fq in `ls $1/*.gz`;do
+        if [ ! ${fq##*$3} ];then
+            sample=$(basename ${fq%$3})
+            param="--paired-end $fq $1/$sample${3/1/2}"  #  --no-mixed --no-discordant 只适用于bowtie2
+        elif [ ${fq##*${3/1/2}} ] && [ ! ${fq##*$4} ];then
+            sample=$(basename ${fq%$4})
+            param="$fq"
+        else continue
+        fi
+        out=$2/$sample
+        [ -s $out.log ] || rsem-calculate-expression -p $threads --$6 $param \
+            $stargz $5 $out --sort-bam-by-coordinate --output-genome-bam >$out.log
+    done
+    [ -d $(dirname "$9") ] || mkdir $(dirname "$9") -p
+    awk 'NR==1{print "sample\tend\ttotal reads\talignment rate\tunmap reads"}
+        FNR==1{t=$0;gsub("[^0-9]","",t)}
+        FNR==2{if (index($0,"unpaired")==0)end="paired end";else end="single end"}
+        FNR==3{print FILENAME"\t"end"\t"t"\t"1-$1/t"\t"$1}' $2/*.log | \
+    sed "s#$2/\|.log##g" >$9
+    [ -d $(dirname "${10}") ] || mkdir $(dirname "${10}") -p
+    rsem-generate-data-matrix $2/*.genes.results | sed "s#$2/\|.genes.results##g" >${10}.counts.txt
+    sed 's#my $offsite = 4;#my $offsite = 5;#' $(which rsem-generate-data-matrix) >tpm.pl
+    sed 's#my $offsite = 4;#my $offsite = 6;#' $(which rsem-generate-data-matrix) >fpkm.pl
+    perl tpm.pl $2/*.genes.results | sed "s#$2/\|.genes.results##g" >${10}.tpm.txt
+    perl fpkm.pl $2/*.genes.results | sed "s#$2/\|.genes.results##g" >${10}.fpkm.txt
+    rm tpm.pl fpkm.pl
+}
+
+# BOWTIE2 fq/fastp "bowtie2/host/*.bam" .1.gz .gz $hostIndex merge/fq.map.xls $threads un
+# 双端reads按对计数，双端的alignmentRate只计算一对都比对上的结果，和bowtie2原本的结果有所不同。
+BOWTIE2(){
+    [ -d $1 ] || return 1
+    echo BOWTIE2 $1 $(dirname "$2")
+    local un fq sample threads param bam
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    threads=$7
+    if [ $8 ] && [ $8 == 'un' ];then un='--no-unal';fi
+    for fq in `ls $1/*.gz`;do
+        if [ ! ${fq##*$3} ];then
+            sample=$(basename ${fq%$3})
+            param="--no-mixed --no-discordant $un -1 $fq -2 $1/$sample${3/1/2}" # nomixed不考虑pair reads比对到不同片段的情况；nodiscordant不考虑pair reads比对的方向、距离不符合预期的情况
+        elif [ ${fq##*${3/1/2}} ] && [ ! ${fq##*$4} ];then
+            sample=$(basename ${fq%$4})
+            param="$un -U $fq"
+        else continue
+        fi
+        bam=${2%\**}$sample${2#*\*}
+        [ -s $bam ] || bowtie2 -p $threads -X 1000 \
+        -x $5 $param 2>$bam.log | \
+        samtools sort -@ $threads -o $bam
+        [ -s $bam.bai ] || samtools index -@ $threads $bam
+        [ -s $bam.idxstats ] || samtools idxstats -@ $threads $bam >$bam.idxstats
+    done
+    [ -d $(dirname "$6") ] || mkdir $(dirname "$6") -p
+    awk 'BEGIN{print "sample\tend\ttotal reads\talignment rate\tmapped reads\tunmap reads"}
+        / reads; of these:$/{t=$0;gsub("[^0-9]","",t);getline;
+        if (index($0,"unpaired")==0)end="paired end";else end="single end";getline;
+        print FILENAME"\t"end"\t"t"\t"1-$1/t"\t"t-$1"\t"$1}' ${2%\**}*${2#*\*}.log | \
+    sed "s#${2%\**}\|${2#*\*}.log##g" >$6
+}
+
+# HISAT2 fq/fastp "bowtie2/host/*.bam" .1.gz .gz $hostIndex merge/fq.map.xls $threads un
+# 双端reads按对计数，双端的alignmentRate只计算一对都比对上的结果，和bowtie2原本的结果有所不同。
+HISAT2(){
+    [ -d $1 ] || return 1
+    echo HISAT2 $1 $(dirname "$2")
+    local un fq sample threads param bam
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    threads=$7
+    if [ $8 ] && [ $8 == 'un' ];then un='--no-unal';fi
+    for fq in `ls $1/*.gz`;do
+        if [ ! ${fq##*$3} ];then
+            sample=$(basename ${fq%$3})
+            param="--no-mixed --no-discordant $un -1 $fq -2 $1/$sample${3/1/2}" # nomixed不考虑pair reads比对到不同片段的情况；nodiscordant不考虑pair reads比对的方向、距离不符合预期的情况
+        elif [ ${fq##*${3/1/2}} ] && [ ! ${fq##*$4} ];then
+            sample=$(basename ${fq%$4})
+            param="$un -U $fq"
+        else continue
+        fi
+        bam=${2%\**}$sample${2#*\*}
+        [ -s $bam ] || hisat2 -p $threads -X 1000 \
+        -x $5 $param 2>$bam.log | \
+        samtools sort -@ $threads -o $bam
+        [ -s $bam.bai ] || samtools index -@ $threads $bam
+        [ -s $bam.idxstats ] || samtools idxstats -@ $threads $bam >$bam.idxstats
+    done
+    [ -d $(dirname "$6") ] || mkdir $(dirname "$6") -p
+    awk 'BEGIN{print "sample\tend\ttotal reads\talignment rate\tmapped reads\tunmap reads"}
+        / reads; of these:$/{t=$0;gsub("[^0-9]","",t);getline;
+        if (index($0,"unpaired")==0)end="paired end";else end="single end";getline;
+        print FILENAME"\t"end"\t"t"\t"1-$1/t"\t"t-$1"\t"$1}' ${2%\**}*${2#*\*}.log | \
+    sed "s#${2%\**}\|${2#*\*}.log##g" >$6
+}
+
+# FEATURECOUNTS "bowtie2/host/*.bam" "featureCount/*.featureCounts" $gtf $threads
+FEATURECOUNTS(){
+    echo FEATURECOUNTS $(dirname "$1") $(dirname "$2")
+    local bam sample threads out paired fc gtf
+    fc=~/software/subread/subread-2.1.1-Linux-x86_64/bin/featureCounts
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    gtf=$3; threads=$4
+    for bam in `ls $1`;do
+        sample=$(echo $bam|sed "s#${1%\**}\|${1#*\*}##g")
+        out=${2%\**}$sample${2#*\*}
+        # ls $out* >/dev/null 2>&1 && continue
+        if [ -s $out ]; then echo $out 文件非空; continue; fi
+        if [ ! -s $bam ]; then echo $bam 文件是空的; continue; fi
+        echo 正在统计 $bam 的 featureCounts
+        # 判断单端还是双端
+        if (($(samtools view $bam|head -n1|cut -f2) % 2)); then paired=-pBC; fi # 是双端，这个值是奇数，求余计算结果为1
+        # $fc -T $threads -a $gtf -o $out -f -t transcript -g gene_id $paired $bam
+        $fc -T $threads -a $gtf -o $out -t transcript -M -O --fraction -d 30 --minOverlap 20 --fracOverlap 0.5 $paired $bam 2>$out.log  # --fraction
+        # $fc -T $threads -a $gtf -o $out -t transcript -M -d 30 --minOverlap 30 $paired $bam 2>$out.log
+    done
+}
+
+# BAM_FLAGSTAT "bowtie2/host/*.bam" merge/fq.map.xls $threads
+BAM_FLAGSTAT(){
+    echo BAM_FLAGSTAT $(dirname "$1")
+    local threads bam flst sample
+    threads=$3
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    echo -e 'sample\tend\ttotal reads\talignment rate\tmapped reads\tunmap reads' > $2
+    for bam in `ls $1`;do
+        # [ -s $bam.bai ] || samtools index -@ $threads $bam
+        [ -s $bam.flagstat ] || samtools flagstat -@ $threads $bam >$bam.flagstat
+    done
+    for flst in `ls $1.flagstat`;do
+        if [ ! -s $flst ]; then echo $flst is empty!!!; continue; fi
+        sample=$(echo $flst | sed "s#${1%\**}\|${1#*\*}.flagstat##g")
+        # 双端的reads统计的是多少对且proper pair的，而不是多少条
+        awk -v sp=$sample '/read1$/{e=$1}/total/{t=$1}/[0-9] mapped/{sm=$1}
+            /properly paired/{pm=$1}END{if(e==0)print sp"\tsingle end\t"t"\t"sm/t"\t"sm"\t"t-sm;
+            else print sp"\tpaired end\t"t/2"\t"pm/t"\t"pm/2"\t"(t-pm)/2}' $flst >>$2
+    done
+}
+
+# extract mapped/unmap/all/chrosomes reads from bam to fq.gz
+# BAM2FQ "bowtie2/host/*.bam" unmap "fq/unmap/*" $threads
+BAM2FQ(){
+    echo BAM2FQ $(dirname "$1") $(dirname "$3") METHOD $2
+    local bam sample threads out param1 param2 fq
+    [ -d $(dirname "$3") ] || mkdir $(dirname "$3") -p
+    threads=$4
+    for bam in `ls $1`;do
+        sample=$(echo $bam|sed "s#${1%\**}\|${1#*\*}##g")
+        out=${3%\**}$sample${3#*\*}
+        # ls $out* >/dev/null 2>&1 && continue
+        if [ -s $out.log ]; then echo $out.log 文件非空; continue; fi
+        if [ ! -s $bam ]; then echo $bam 文件是空的; continue; fi
+        echo 正在提取 $bam 的 $2 reads
+        # 判断单端还是双端，设置param1和param2
+        if (($(samtools view $bam|head -n1|cut -f2) % 2)); then # 是双端，这个值是奇数，求余计算结果为1
+            if [ "$2" == "unmap" ]; then param1="-f1 -F2"; elif [ "$2" == "mapped" ]; then param1="-f3";fi
+            param2="-1 $out.1.gz -2 $out.2.gz"
+        else if [ "$2" == "unmap" ]; then param1="-F1 -f4"; elif [ "$2" == "mapped" ]; then param1="-F5";fi
+            param2="-0 $out.gz"
+        fi
+        # 判断是all还是挑染色体，修改param1
+        if [ "$2" == "all" ]; then param1=""; [ ! -s $out.bam ] && ln -f $bam $out.bam
+            elif [ "$2" != "unmap" ] && [ "$2" != "mapped" ]; then param1="$2"; fi
+        [ ! -s $out.bam ] && samtools view -@ $threads -h $bam $param1 -o $out.bam
+        [ ! -s ${param2##* } ] && samtools collate -u -@ $threads -O $out.bam | samtools fastq -@ $threads $param2 2>$out.log
+        # bedtools bamtofastq
+    done
+}
+
+# EXTRACT_KRAKEN2_SPECIESTREE $kk2DB merge/kraken2.$kk2DB_name.taxon.xls
+EXTRACT_KRAKEN2_SPECIESTREE(){
+    echo EXTRACT_KRAKEN2_SPECIESTREE $1 $2
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    [[ $1 =~ 21Bc ]] && cp ~/script/kraken2.$(basename $1).taxon.xls $2 && return 0
+    [ -s $2 ] || kraken2-inspect --db $1 --report-zero-counts | \
+    awk 'BEGIN{FS=OFS="\t"}NR==1{print "txID\tRankCode\tDBMinimizers\tDBDistinctMinimizers\tScientificName\tDomain\tKindom\tPhylum\tClass\tOrder\tFamily\tGenus\tSpecies"}
+        NR>7{ ln=match($6,"[^ ]")/2-0.5;sub("^[ ]*","",$6);
+        rc[ln]=$4;sc[ln]=$6;i=0;while (i<=ln){
+            if (length(rc[i])==1){
+                if (rc[i]=="R"){r=sc[i];d=k=p=c=o=f=g=s=NA}
+                else if (rc[i]=="D"){d=sc[i];k=p=c=o=f=g=s=NA}
+                else if (rc[i]=="K"){k=sc[i];p=c=o=f=g=s=NA}
+                else if (rc[i]=="P"){p=sc[i];c=o=f=g=s=NA}
+                else if (rc[i]=="C"){c=sc[i];o=f=g=s=NA}
+                else if (rc[i]=="O"){o=sc[i];f=g=s=NA}
+                else if (rc[i]=="F"){f=sc[i];g=s=NA}
+                else if (rc[i]=="G"){g=sc[i];s=NA}
+                else if (rc[i]=="S") s=sc[i]}
+            else {
+                RC=substr(rc[i],1,1);
+                if (RC=="R"){d=k=p=c=o=f=g=s=NA}
+                else if (RC=="D"){k=p=c=o=f=g=s=NA}
+                else if (RC=="K"){p=c=o=f=g=s=NA}
+                else if (RC=="P"){c=o=f=g=s=NA}
+                else if (RC=="C"){o=f=g=s=NA}
+                else if (RC=="O"){f=g=s=NA}
+                else if (RC=="F"){g=s=NA}
+                else if (RC=="G") s=NA}
+            i+=1}
+        print $5,$4,$2,$3,$6,d,k,p,c,o,f,g,s}' > $2
+}
+
+# METAPHLAN fq/unmap "metaphlan/mpa_vOct22_CHOCOPhlAnSGB_202212/*" .1.gz .gz mpa_vOct22_CHOCOPhlAnSGB_202212 merge/metaphlan.mpa_vOct22_CHOCOPhlAnSGB_202212.xls $threads
+# 默认DB位置在：~/software/miniforge3/envs/default/lib/python3.10/site-packages/metaphlan/metaphlan_databases/
+METAPHLAN(){
+    echo METAPHLAN $1 $(dirname "$2")
+    local fq pe se inFq2suffix threads out
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    threads=$7
+    for fq in `ls $1/*.gz`;do
+        if [ ! ${fq##*$3} ];then
+            sample=$(basename ${fq%$3})
+            param="$fq,$1/$sample${3/1/2}"
+        elif [ ${fq##*${3/1/2}} ] && [ ! ${fq##*$4} ];then
+            sample=$(basename ${fq%$4})
+            param="$fq"
+        else continue
+        fi
+        out=${2%\**}$sample${2#*\*}
+        # 一种方式是比对到提前下载好的bowtie2db，下载代码：metaphlan --install --bowtie2db <database folder>，也可用--index指定版本
+        [ -s $out.log ] || metaphlan $param --bowtie2db $5 --bowtie2out $out.bt2.bz2 \
+            --nproc $threads --input_type fastq -o $out.txt 1>$out.log 2>&1
+        # 另一种用-x参数指定index的mapping方式，但是程序会自动联网下载指定的数据库，latest指最新的数据库，经常报错，不推荐
+        # [ -s $out.log ] || metaphlan $param -x latest --bowtie2out $out.bt2.bz2 \
+        #     --nproc $threads --input_type fastq -o $out.txt 1>$out.log 2>&1
+    done
+    [ -d $(dirname "$6") ] || mkdir $(dirname "$6") -p
+    [ -s $6.gz ] || (merge_metaphlan_tables.py $2.txt > $6 && gzip -f $6)
+}
+
+# KRAKEN2 fq/unmap "kraken2/$kk2DB_name/*" .1.gz .gz $kk2DB merge/kraken2.$kk2DB_name.xls $threads
+# kraken2中双端reads也是按对计数。
+KRAKEN2(){
+    echo KRAKEN2 $1 $(dirname "$2")
+    local fq pe se inFq2suffix threads out
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    threads=$7
+    for fq in `ls $1/*.gz`;do
+        if [ ! ${fq##*$3} ];then
+            sample=$(basename ${fq%$3})
+            param="--paired $fq $1/$sample${3/1/2}"
+        elif [ ${fq##*${3/1/2}} ] && [ ! ${fq##*$4} ];then
+            sample=$(basename ${fq%$4})
+            param="$fq"
+        else continue
+        fi
+        out=${2%\**}$sample${2#*\*}
+        [ -s $out.k2report ] || kraken2 --db $5 --threads $threads \
+        --minimum-hit-groups 3 --report-minimizer-data --report-zero-counts \
+        --use-names --gzip-compressed --output $out.k2out \
+        --report $out.k2report $param 1>$out.log 2>&1  # --confidence 0.2
+    done
+    [ -d $(dirname "$6") ] || mkdir $(dirname "$6") -p
+    [ -s $6.gz ] || (awk -v p=${2%\**} -v s=${2#*\*}.k2report \
+        'BEGIN{FS=OFS="\t"}NR==1{print "sample\ttxID\tkraken2ReadsCounts\tkraken2DistinctReadsCount\tkraken2Minimizers\tkraken2DistinctMinimizers"}
+        {print substr(FILENAME,length(p)+1,length(FILENAME)-length(p)-length(s)),$7,$2,$3,$4,$5}' \
+        $2.k2report >$6 && gzip -f $6)
+}
+
+# COMPRESS_K2OUT_HOST "XXX*.k2out" $threads
+COMPRESS_K2OUT_HOST(){
+    local k2out
+    [ -e /tmp/fd11 ] || mkfifo /tmp/fd11;exec 9<>/tmp/fd11
+        rm /tmp/fd11;for ((i=1;i<=$2;i++));do echo >&9;done
+    for k2out in `ls $1`;do
+    read -u9
+    {
+        grep -v "(taxid 10090)\|(taxid 9606)" $k2out >$k2out.tmp
+        mv $k2out.tmp $k2out && gzip $k2out
+        echo >&9
+    }&
+    done
+    wait;exec 9<&-;exec 9>&-
+}
+
+# awk实现列名搜索，grep "$txIDs" 可以直接搜索多行字符串模式
+# EXTRACT_KRAKEN2_READS "kraken2/$db/*.k2out" merge/kraken2.$db.taxon.xls $threads Genus/ABVF/nohost $G
+EXTRACT_KRAKEN2_READS(){
+    echo EXTRACT_KRAKEN2_READS $(dirname "$1") $4 $5 $3
+    local k2out txIDs suffix
+    if [ $4 == 'ABVF' ]; then suffix='ABVF'
+        txIDs=$(grep -P "\tBacteria\t|\tFungi\t|\tViruses\t|\tArchaea\t" \
+            $2|cut -f1|sed -e 's/^/(taxid /' -e 's/$/)/')
+    elif [ $4 == 'nohost' ]; then suffix='nohost'
+        txIDs=$(grep -Pv "\tHomo\t|\tMus\t" $2|cut -f1|sed -e 's/^/(taxid /' -e 's/$/)/')
+    else suffix="$4.${5// /_}"
+        txIDs=$(awk -v l="$4" -v n="$5" 'BEGIN{FS="\t";if(l=="Species")gsub("_"," ",n)}
+            NR==1{for(i=1;i<=NF;i++)c[$i]=i}{if($c[l]==n)print "(taxid "$1")"}' $2)
+    fi
+    [ -e /tmp/fd11 ]||mkfifo /tmp/fd11;exec 9<>/tmp/fd11
+        rm /tmp/fd11;for ((i=1;i<=$3;i++));do echo >&9; done
+    for k2out in `ls $1`;do
+    read -u9
+    {
+        [ -s $k2out.$suffix.readslist ] || \
+        grep "$txIDs" $k2out|cut -f2 > $k2out.$suffix.readslist
+        echo >&9
+    }&
+    done
+    wait;exec 9<&-;exec 9>&-
+}
+
+# 根据readslist文件，从FQ文件中提取并生成子集FQ文件
+# EXTRACT_FQ_READS "fq/unmap/*.gz" "kraken2/$db/*.k2out.Genus.$G.readslist" fq/microbe/$db.$G $threads v
+EXTRACT_FQ_READS(){
+    echo EXTRACT_FQ_READS $(dirname "$1") $3
+    local rl sample fq
+    [ -d $3 ] || mkdir $3 -p
+    for rl in `ls $2`;do
+        sample=$(echo $rl|sed "s#${2%\**}\|${2#*\*}##g")
+        for fq in `ls $1|grep $sample`;do
+            [ -s $3/$(basename $fq) ] || seqkit grep -j $4 -${5}f $rl $fq -o $3/$(basename $fq)
+        done
+    done
+}
+
+# EXTRACT_KRAKEN2_GENOMES kraken2TaxonTreefile level Names XXX.fna threads
+# 这里的Names是否需要换成array形式
+EXTRACT_KRAKEN2_GENOMES(){
+    echo EXTRACT_KRAKEN2_GENOMES $2 $3 $1
+    local name
+    [ -d $(dirname "$4") ] || mkdir $(dirname "$4") -p
+    touch id.tmp
+    for name in $3;do
+        awk -v l="$2" -v n="$name" 'BEGIN{FS="\t";if(l=="Species")gsub("_"," ",n)}
+            NR==1{for(i=1;i<=NF;i++)c[$i]=i}{if($c[l]==n)print $1}' $1 >> id.tmp
+    done
+    [ -s $4 ] || seqkit grep -j $5 --id-regexp "kraken:taxid\|([0-9]+)\|" \
+        -f id.tmp ~/databases/ABVF/library/bacteria/library.fna -o $4 && rm id.tmp
+    for name in $3;do
+        awk -v l="$2" -v n="$name" 'BEGIN{FS="\t";if(l=="Species")gsub("_"," ",n)}
+            NR==1{for(i=1;i<=NF;i++)c[$i]=i}{if($c[l]==n)print $1}' $1 > id.tmp
+        seqkit grep -j $5 --id-regexp "kraken:taxid\|([0-9]+)\|" -f id.tmp $4 -o $4.$name.fna && rm id.tmp
+        [ -s $4.$name.1.bt2 ] || bowtie2-build --threads $5 $4.$name.fna $4.$name
+    done
+}
+
+# EXTRACT_BAM_READS "XXX.bam" 
+# 这个函数还没完善，先用BAM2FQ提取mapped加KRAKEN2代替
+EXTRACT_KRAKEN2_RESULT(){
+    echo EXTRACT_KRAKEN2_RESULT
+    local bam threads
+    python make_ktaxonomy.py --nodes  --names  --seqid2taxid  -o $taxon
+    for bam in `ls ${1}`;do
+        samtools view -@ $threads -f3 ${bam}|cut -f1|sort -u >$bam.mappedReads
+        samtools view -@ $threads -F5 ${bam}|cut -f1|sort -u >>$bam.mappedReads
+        grep -f $bam.mappedReads $k2out > $newk2out
+        python make_kreport.py -i $newk2out -t $taxon -o $newk2report
+    done
+    [ -d $(dirname "$6") ] || mkdir $(dirname "$6") -p
+    awk -v p=${2%\**} -v s=${2#*\*}.k2report \
+        'BEGIN{FS=OFS="\t"}NR==1{print "sample\ttxID\tkraken2ReadsCounts\tkraken2DistinctReadsCount\tkraken2Minimizers\tkraken2DistinctMinimizers"}
+        {print substr(FILENAME,length(p)+1,length(FILENAME)-length(p)-length(s)),$7,$2,$3,$4,$5}' $2.k2report >$6
+}
+
+# 根据kraken2的out文件，从bam文件中提取与kraken2分类重合的reads，并生成新的子集bam文件
+# EXTRACT_BAM_RESULT $speciesName merge/kraken2.$kk2DB_name.taxon.xls \
+#     "kraken2/$kk2DB_name/*.k2out" "$bam" "$itbam" $threads
+EXTRACT_BAM_RESULT(){
+    echo EXTRACT_BAM_RESULT $(dirname "$4") $1 $2
+    local k2out txIDs threads sample bam out
+    threads=$6
+    txIDs=$(awk -v l="Species" -v n="$1" 'BEGIN{FS="\t";if(l=="Species")gsub("_"," ",n)}
+        NR==1{for(i=1;i<=NF;i++)c[$i]=i}{if($c[l]==n)print "(taxid "$1")"}' $2)
+    [ ${#txIDs} == 0 ] && return 1      # 根据taxon文件取交集，如果没有交集，就跳过此步骤
+    [ -d $(dirname "$5") ] || mkdir $(dirname "$5") -p
+    for bam in `ls $4`;do
+        sample=$(echo $bam|sed "s#${4%\**}\|${4#*\*}##g")
+        out=${5%\**}${sample}${5#*\*}
+        k2out=${3%\**}${sample}${3#*\*}
+        [ -s $out.log -o -s $out ] && continue
+        grep "$txIDs" $k2out|cut -f2 > $k2out.tmp
+        samtools view -@ $threads -N $k2out.tmp $bam -h | \
+        samtools sort -@ $threads -o $out >$out.log 2>&1 && \
+        samtools index $out
+        rm $k2out.tmp
+    done
+}
+
+# 根据bam文件以及gff注释文件计算coverage，当gff是从gbff文件转换得到时用GeneBank参数；
+# reads_weighting是分别计算每一条染色体的coverage，并以这条染色体上的reads数量占总reads数比例作为权重，加和所得；
+# reads_weighting模式适用于，当该基因组是多个Species合并而成的一个混合Genus基因组时，计算该Genus的coverage的情形
+# COMPUTE_COVERAGE $refGff "$bam" merge/coverage.$speciesName.intersect.none.xls $(($threads/2)) reads_weighting/GenBank
+COMPUTE_COVERAGE(){
+    echo COMPUTE_COVERAGE $(dirname "$2") $3
+    local minDepth pc rR genomeLength Statcol biotype bam bt mappedReads mappedBases \
+        sample genomeStat ReadsCount CvbsLengthStat biotypeStat
+    minDepth=3
+    [ -d $(dirname "$3") ] || mkdir $(dirname "$3") -p
+    if [ ! "${1#*.gff}" ];then
+        if [ $5 ] && [ $5 == 'GenBank' ];then pc='\tGenBank\tCDS\t'; rR='\tGenBank\trRNA\t'
+        else pc='gene_biotype=protein_coding'; rR='gene_biotype=rRNA'; fi
+        grep -P '\tregion\t' $1 | gff2bed - 2>/dev/null | bedtools sort | bedtools merge > tmp.gene_bt.chr
+        grep -P $pc $1 | gff2bed - 2>/dev/null | bedtools sort | bedtools merge > tmp.gene_bt.protein_coding
+        grep -P $rR $1 | gff2bed - 2>/dev/null | bedtools sort | bedtools merge > tmp.gene_bt.rRNA
+        # others包括misc_RNA，ncRNA，pseudogene，SRP_RNA，tmRNA，tRNA，other等等
+        cat tmp.gene_bt.{rRNA,protein_coding} | bedtools sort | bedtools merge > tmp.gene_bt.tmp
+        bedtools subtract -a tmp.gene_bt.chr -b tmp.gene_bt.tmp > tmp.gene_bt.others
+        biotype=(protein_coding rRNA others)
+    #     genomeLength=$(awk 'BEGIN{L=0}{L=L+$3}END{print L}' tmp.gene_bt.chr)
+    # else genomeLength=$(bowtie2-inspect -s $1|awk 'BEGIN{FS="\t"}{L+=$3}END{print L}')
+    fi
+    [ -e /tmp/fd11 ]||mkfifo /tmp/fd11;exec 9<>/tmp/fd11
+        rm /tmp/fd11;for ((i=1;i<=$4;i++));do echo >&9; done
+    for bam in `ls $2`;do
+    [ -s $bam.coverage.xls ] && continue
+    read -u9
+    {
+        genomeLength=$(samtools idxstats $bam | awk '{L+=$2}END{print L}')
+        mappedReads=$((`samtools view -@ 2 -f3 -c $bam`/2 + `samtools view -@ 2 -F5 -c $bam`))
+        mappedBases=$(samtools stat -@ 2 $bam | grep "bases mapped:" | cut -f3)
+        sample=$(basename ${bam%${2#*\*}})
+        if [ $5 ] && [ $5 == 'reads_weighting' ];then
+        [ -s $bam.idxstats ] || samtools idxstats -@ 2 $bam >$bam.idxstats
+        # r[chr]：该chr上的reads数，tr：totalReads数，L[chr]该chr长度，a[chr][i]：depth为i时chr的覆盖长度
+            # 注意a[chr][i]形式是多层嵌套数组，for chr in a遍历的是chr值，不包括i值；要遍历i值得写for i in a[chr1]
+            # 而a[chr,i]形式看似二维实际上是一维存储，此时for n in a遍历的是[chr,i]值组合
+        genomeStat=$(samtools depth -@ 2 $bam | awk -v d=$minDepth 'NR==FNR{
+            r[$1]=$3;tr+=$3;L[$1]=$2}NR!=FNR{for (i=0;i<d;i+=1)if($3>i)a[$1][i]+=1}
+            END{for (i=0;i<d;i+=1){for(chr in a)if(tr!=0)b[i]+=(r[chr]/tr)*(a[chr][i]/L[chr]);
+            printf "\t"b[i]}}' $bam.idxstats -)
+        else
+        genomeStat=$(samtools depth -@ 2 $bam | awk -v d=$minDepth -v gL=$genomeLength 'BEGIN{
+            for (i=0;i<d;i+=1)a[i]=0}{for (i=0;i<d;i+=1)if ($3>i)a[i]+=1}END{
+                for (i=0;i<d;i+=1)printf "\t"a[i]/gL}')
+        fi
+        # 如果提供了基因组注释信息，则分别计算各区域的coverage
+        if [ ! "${1#*.gff}" ];then
+        for bt in ${biotype[@]};do
+            ReadsCount=$(bedtools coverage -a tmp.gene_bt.$bt -b $bam | awk 'BEGIN{RC=0}{RC+=$4}END{printf RC}')
+            # bedtools coverage 计算出来的mappedbases和samtools depth / bedcov计算出来的不同，
+            # samtools会排除掉reads上的单碱基gap，而bedtools会把reads上的单碱基gap计算进去
+            CvbsLengthStat=$(samtools depth -@ 2 -aa -b tmp.gene_bt.$bt $bam | awk -v d=$minDepth 'BEGIN{
+            Cvbs=0;L=0;for (i=0;i<d;i+=1)a[i]=0}{Cvbs+=$3;L+=1;for (i=0;i<d;i+=1)if ($3>i)a[i]+=1}END{
+                printf Cvbs"\t"L;if(L==0)L=1;for (i=0;i<d;i+=1)printf "\t"a[i]/L}')
+            biotypeStat=$(echo -e "$biotypeStat\t$ReadsCount\t$CvbsLengthStat")
+        done
+        fi
+        echo -e "$sample\t$mappedReads\t$mappedBases\t$genomeLength$genomeStat$biotypeStat" > $bam.coverage.xls
+        unset genomeStat biotypeStat
+        echo >&9
+    }&
+    done
+    wait;exec 9<&-;exec 9>&-
+    [ -e tmp.gene_bt.chr ] && rm tmp.gene_bt*
+    Statcol=$(awk -v d=$minDepth 'BEGIN{a[1]="genome";a[2]="protein_coding";a[3]="rRNA";a[4]="others";
+        b[1]="Reads";b[2]="Bases";b[3]="Length";b[4]="CoverRatio_depth";
+        for (j=1;j<5;j++){for(k=1;k<4;k++){printf "\t"a[j]""b[k]}
+        for (i=0;i<d;i+=1)printf "\t"a[j]"CoverRatio_depth"i+1}}')
+    echo -e "sample$Statcol" > $3
+    cat $2.coverage.xls >>$3
+}
+
+# MERGE_COVERAGE "merge/coverage.*.xls" merge/merge.coverage.xls
+MERGE_COVERAGE(){
+    echo MERGE_COVERAGE $2
+    awk -v p=${1%\**} -v s=${1#*\*} 'BEGIN{FS=OFS="\t"}NR==1{print "species\tintersect\t"$0}
+        FNR!=1{sp=substr(FILENAME,length(p)+1,length(FILENAME)-length(p)-length(s));
+        split(sp,arr,".intersect.");gsub("_"," ",arr[1]);print arr[1],arr[2],$0}' $1 >$2
+}
+
+# BAM2BDG_RPB "$bam" "$bam.RPB.bdg" merge/fq.fastp.xls $threads
+# 计算ReadsPerBillionReads的totalReads来自fq.fastp文件，双端reads按对计数。
+BAM2BDG_RPB(){
+    echo BAM2BDG_RPB $(dirname "$1") $(dirname "$2")
+    local bam sample totalreads
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2")
+    [ -e /tmp/fd11 ]||mkfifo /tmp/fd11;exec 9<>/tmp/fd11
+        rm /tmp/fd11;for ((i=1;i<=$4;i++));do echo >&9; done
+    for bam in `ls $1`;do
+    read -u9
+    {
+        sample=$(echo $bam | sed "s#${1%\**}\|${1#*\*}##g")
+        # awk根据列名提取数据
+        totalreads=$(awk -v s=$sample 'BEGIN{
+            FS=OFS="\t"}NR==1{for(i=1;i<=NF;i++)c[$i]=i}
+            {if($c["sample"]==s)print $c["ReadsAfterFilt"]}' $3)
+        [ -s ${2%\**}${sample}${2#*\*} ] || \
+        bedtools genomecov -ibam $bam -bga | \
+        awk -v R=$totalreads 'BEGIN{FS=OFS="\t"}{
+            $4=$4*1000000000/R;print $0}' >${2%\**}${sample}${2#*\*}
+        echo >&9
+    }&
+    done
+    wait;exec 9<&-;exec 9>&-
+}
+
+# chrM_RATE "bowtie2/atac/*.bam" merge/atac.chrMRatio.xls $threads
+chrM_RATE(){
+    echo chrM_RATE $(dirname "$1") $2
+    local threads bam ist
+    threads=$3
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    echo -e 'sample\ttotalFragments\tchrMFragments\tchrMRatio' >$2
+    for bam in `ls $1`;do
+        [ -s $bam.bai ] || samtools index -@ $threads $bam
+        [ -s $bam.idxstats ] || samtools idxstats -@ $threads $bam >$bam.idxstats
+    done
+    for ist in `ls $1.idxstats`;do
+        [ -s $ist ] || echo $ist is empty
+        awk 'BEGIN{FS=OFS="\t";m=t=0}{t+=$3;if($1=="chrM")m+=$3}
+            END{print FILENAME,t,m,m/t}' $ist | \
+            sed "s#${1%\**}\|${1#*\*}.idxstats##g" >>$2
+    done
+}
+
+# BAM_F2Q30_chrM "bowtie2/atac/*.bam" `dirname "$bam"` $threads
+BAM_F2Q30_chrM(){
+    echo BAM_F2Q30_chrM $(dirname "$1") $2
+    local bam threads
+    [ -d $2 ] || mkdir $2 -p
+    threads=$3
+    for bam in `ls $1`;do
+        [ -s $2/$(basename $bam).log ] && continue
+        [ -s $2/$(basename $bam) ] || \
+        samtools view -f 2 -q 30 -@ $threads $bam -h | grep -v chrM | \
+        samtools sort -@ $threads -o $2/$(basename $bam)
+        [ -s $2/$(basename $bam).bai ] || samtools index $2/$(basename $bam)
+        echo f2q30chrM complete > $2/$(basename $bam).log
+    done
+}
+
+# EST_LIB_COMPLEX "bowtie2/atac/*.bam" bowtie2/atac $picard $threads
+# 这个与markdup都能输出libSize，但参数和结果都相差很大，本流程选择Markdup方法的输出结果
+EST_LIB_COMPLEX(){
+    echo EST_LIB_COMPLEX $(dirname "$1")
+    local bam threads
+    [ -d $2 ] || mkdir $2 -p
+    threads=$4
+    for bam in `ls $1`;do
+        [ -s $2/$(basename $bam).out ] || \
+        java -XX:ParallelGCThreads=$threads \
+            -jar $3 EstimateLibraryComplexity  \
+            MIN_MEAN_QUALITY=30 \
+            INPUT=$bam \
+            OUTPUT=$2/$(basename $bam).out \
+            2> $2/$(basename $bam).log
+    done
+}
+
+# MARK_DUPLICATE "$bam" atac_$cond/finalbam $picard $threads
+# .out文件中有librarysize信息，可用于后续统计
+MARK_DUPLICATE(){
+    echo MARK_DUPLICATE $(dirname "$1") $2
+    local bam threads
+    [ -d $2 ] || mkdir $2 -p
+    threads=$(($4/3))
+    [ -e /tmp/fd11 ]||mkfifo /tmp/fd11;exec 9<>/tmp/fd11
+        rm /tmp/fd11;for ((i=1;i<=3;i++));do echo >&9; done
+    for bam in `ls $1`;do
+    read -u9
+    {
+        [ -s $2/$(basename $bam).log ] || \
+        java -XX:ParallelGCThreads=$threads \
+            -jar $3 MarkDuplicates \
+            INPUT=$bam \
+            OUTPUT=$2/$(basename $bam) \
+            REMOVE_DUPLICATES=true \
+            ASSUME_SORTED=true \
+            METRICS_FILE=$2/$(basename $bam).out \
+            2> $2/$(basename $bam).log
+        [ -s $2/$(basename $bam).bai ] || samtools index $2/$(basename $bam)
+        echo >&9
+    }&
+    done
+    wait;exec 9<&-;exec 9>&-
+}
+
+# DUPRATE_EST_LIB_SIZE "bowtie2/atac/*.bam.out" merge/atac.dupRate_estimatedLibrarySize.xls
+# 这里面的estimatedLibrarySize是衡量文库复杂度LibraryComplexity的，结合dupRate看。一般dupRate<0.4，els一般人50M左右，有5M以上也差不多，无明确标准
+DUPRATE_EST_LIB_SIZE(){
+    echo DUPRATE_EST_LIB_SIZE $2
+    awk 'BEGIN{FS=OFS="\t"}NR==1{print "sample\tdup_rate\testimatedLibrarySize"}
+        FNR==8{print FILENAME,$9,$10}' $1 | sed "s#${1%\**}\|${1#*\*}##g" >$2
+}
+
+# 统计经过ATACQC以后去除了哪些reads，比较耗资源
+# BAM_STAT "atac_$cond/markdup/*.bam" merge/filter.stat.xls $threads
+BAM_STAT(){
+    echo BAM_STAT $(dirname "$1")
+    local bam sample total f2 q30 F1024 chrm threads final
+    threads=$3
+    echo -e 'sample\ttotal\tf2\tq30\tF1024\tchrM\tfinal' >$2
+    for bam in `ls $1`;do
+        sample=$(echo $bam | sed "s#${1%\**}\|${1#*\*}##g")
+        total=$(($(samtools view -@ $threads -c $bam)/2))
+        f2=$(($(samtools view -@ $threads -c -f2 $bam)/2))
+        q30=$(($(samtools view -@ $threads -c -f2 -q30 $bam)/2))
+        F1024=$(($(samtools view -@ $threads -c -f2 -F1024 $bam)/2))
+        chrm=$(($(samtools view -@ $threads -f2 $bam|grep -v chrM|wc -l)/2))
+        final=$(($(samtools view -@ $threads -f2 -q30 -F1024 $bam|grep -v chrM|wc -l)/2))
+        echo -e "$sample\t$total\t$f2\t$q30\t$F1024\t$chrm\t$final" >>$2
+    done
+}
+
+# BAM2BW "$bam" "$bw" RPKM $threads
+BAM2BW(){
+    echo BAM2BW $(dirname "$1") $(dirname "$2") METHOD $3
+    local bs threads bam sample bw
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    bs=10
+    threads=$4
+    for bam in `ls $1`;do
+        sample=$(echo $bam|sed "s#${1%\**}\|${1#*\*}##g")
+        bw=${2%\**}$sample${2#*\*}
+        [ -s $bw ] || bamCoverage -b $bam -o $bw \
+        -bs $bs -p $threads --normalizeUsing $3 2>$bw.log
+    done
+}
+
+# INSERTSIZE "$bam" atac_$cond/insertSize $picard $threads
+INSERTSIZE(){
+    echo INSERTSIZE $(dirname "$1") $2
+    local bam threads
+    [ -d $2 ] || mkdir $2 -p
+    threads=$4
+    for bam in `ls $1`;do
+        [ -s $2/$(basename $bam).histogram.pdf ] || \
+        java -XX:ParallelGCThreads=$threads \
+            -jar $3 CollectInsertSizeMetrics I=$bam \
+            O=$2/$(basename $bam).metrics.txt \
+            H=$2/$(basename $bam).histogram.pdf \
+            M=0.5 1> $2/$(basename $bam).log 2>&1
+    done
+}
+
+# TSS_ENRICH "$bam" $gtf atac_$cond/TSS merge/atac.tssScore.xls $(($threads/2))
+TSS_ENRICH(){
+    echo TSS_ENRICH $(dirname "$1") $3
+    local bam sample score
+    [ -d $3 ] || mkdir -p $3
+    [ -d $(dirname $4) ] || mkdir $(dirname $4)
+    echo -e 'sample\tTSSscore' >$4
+    [ -e /tmp/fd11 ]||mkfifo /tmp/fd11;exec 9<>/tmp/fd11
+        rm /tmp/fd11;for ((i=1;i<=$5;i++));do echo >&9; done
+    for bam in `ls $1`;do
+    read -u9
+    {
+        sample=$(echo $bam | sed "s#${1%\**}\|${1#*\*}##g")
+        [ -s $3/$sample.log ] || ~/software/miniforge3/envs/r/bin/Rscript \
+            scripts/tss.r $bam $2 $3/$sample.pdf $3/$sample.log
+        score=`awk 'NR==1{for(i=1;i<=NF;i++)if(a<$i)a=$i;print a}' $3/$sample.log`
+        echo -e "$sample\t$score" >>$4
+        echo >&9
+    }&
+    done
+    wait;exec 9<&-;exec 9>&-
+}
+
+# ATACFRAGQC "$bam" $gtf merge/atac.tssScore.xls $threads
+ATACFRAGQC(){
+    echo ATACFRAGQC $(dirname "$1")
+    local bam sample
+    [ -d $(dirname $3) ] || mkdir $(dirname $3)
+    echo -e 'sample\tTSSscore' >$3
+    [ -e /tmp/fd11 ]||mkfifo /tmp/fd11;exec 9<>/tmp/fd11
+        rm /tmp/fd11;for ((i=1;i<=$4;i++));do echo >&9; done
+    for bam in `ls $1`;do
+    read -u9
+    {
+        sample=$(echo $bam | sed "s#${1%\**}\|${1#*\*}##g")
+        [ -s ${bam/.bam/}_qc.png ] || ATACFragQC -i $bam -r $2 -o -w 1000 -p a,b,c > $bam.qc.log
+        echo -e "$sample\t$(awk '{if(a<$2)a=$2}END{print a}' ${bam/.bam/}_tss.tsv)" >>$3
+        echo >&9
+    }&
+    done
+    wait;exec 9<&-;exec 9>&-
+}
+
+# PEAK_PLOT mode threads outfile "XXX*.bw XXX*.bw" "XXX.bed XXX.bed"
+PEAK_PLOT(){
+    echo PEAK_PLOT $3 $1
+    local param
+    if [ $1 == 'reference-point' ];then
+        param='--referencePoint center'
+    elif [ $1 == 'scale-regions' ];then
+        param='--regionBodyLength 5000 --startLabel tss --endLabel tes'
+    fi
+    [ -d $(dirname $3) ] || mkdir -p $(dirname $3)
+    [ -s $3.plotMatrix.gz ] || \
+    computeMatrix $1 $param \
+        --beforeRegionStartLength 3000 \
+        --afterRegionStartLength 3000 \
+        --binSize 100 --missingDataAsZero \
+        --regionsFileName $5 \
+        --scoreFileName $4 \
+        --skipZeros -p $2 \
+        --outFileNameMatrix $3.matrix.txt \
+        --outFileName $3.plotMatrix.gz \
+        >$3.plotMatrix.log 2>&1
+    [ -s $3.line.pdf ] || \
+    plotProfile -m $3.plotMatrix.gz \
+        --plotWidth 7 \
+        --numPlotsPerRow 6 \
+        -out $3.line.pdf
+    [ -s $3.heatmap.pdf ] || \
+    plotHeatmap -m $3.plotMatrix.gz \
+        --colorMap Reds \
+        --heatmapHeight 10 \
+        -out $3.heatmap.pdf
+        # --regionsLabel $6 \
+        # --samplesLabel \
+        # --yMax 2500 800 400
+        # --zMax 600 300 500
+        # --colorMap Reds Greys BuPu
+        # --missingDataColor 1 
+        # --sortUsing mean 
+        # --averageTypeSummaryPlot mean 
+        # --refPointLabel peak_center 
+        # --heatmapHeight=25 
+        # --heatmapWidth=5
+        # --sortUsingSamples 1
+}
+
+# MACS2CALLPEAK "$bam" atac_$cond/peak $gsize merge/atac.peakCounts.xls
+MACS2CALLPEAK(){
+    echo MACS2CALLPEAK $(dirname "$1") $2
+    local bam
+    [ -d $2 ] || mkdir $2 -p
+    for bam in `ls $1`;do
+        [ -s $2/$(basename $bam)_peaks.xls ] || \
+        macs2 callpeak -t $bam --outdir $2 -n $(basename $bam) \
+        --nomodel --shift -100 --extsize 200 -g $3 \
+        2>$2/$(basename $bam).callpeak.report
+    done
+    wc -l $2/*.narrowPeak|awk 'BEGIN{print "sample\tpeakCounts"}{print $2"\t"$1}'|\
+        sed -e "s#$2/\|.bam_peaks.narrowPeak\| *##g" -e '$d' > $4
+}
+
+# CALLPEAK_PLOT $threads "$bw" "atac_$cond/peak/*.bam_peaks.narrowPeak"
+CALLPEAK_PLOT(){
+    local bed sample
+    for bed in `ls $3`;do
+        sample=$(echo $bed | sed "s#${3%\**}\|${3#*\*}##g")
+        ls ${3%\**}$sample.peaks* >/dev/null 2>&1 || \
+        PEAK_PLOT reference-point $1 ${3%\**}$sample.peaks \
+            ${2%\**}$sample${2#*\*} $bed
+        ls ${3%\**}$sample.peaks*.{txt,gz} >/dev/null 2>&1 && \
+            rm ${3%\**}$sample.peaks*.{txt,gz}
+    done
+}
+
+# SCC "XXX*.bam" outdir run_spp.R threads
+# conda install r-snow r-snowfall r-bitops r-catools bioconductor-rsamtools boost(boost version error)
+SCC(){
+    local bam threads
+    [ -d $2 ] || mkdir $2 -p
+    threads=$4
+    for bam in `ls $1`;do bamName=$(basename $bam)
+        [ -s $2/$bamName.tagAlign.gz ] || \
+        samtools view -F 0x0204 -o $bam | \
+        awk 'BEGIN{OFS="\t"}{if (and($2,16) > 0)
+            {print $3,($4-1),($4-1+length($10)),"N","1000","-"}
+            else {print $3,($4-1),($4-1+length($10)),"N","1000","+"} }' | \
+        gzip -c >$2/$bamName.tagAlign.gz
+        # samtools view Reads.bam | gawk '(and(16, $2))' > forwardStrandReads.sam
+        [ -s $2/$bamName.tagAlign.SCC.pdf ] || \
+        ~/software/miniforge3/envs/r/bin/Rscript $3 \
+            -c=$2/$bamName.tagAlign.gz \
+            -s=0:5:1000 -p=$threads -odir=$2 \
+            -savp=$2/$bamName.tagAlign.SCC.pdf \
+            -out $2/$bamName.tagAlign.SCC_report.txt \
+            -ccs=$2/$bamName.tagAlign.SCC_data.txt \
+            -samname=$2/$bamName.tagAlign -rf
+    done
+}
+
+# DIFFBIND "$bam" "atac_$cond/peak/*.bam_peaks.xls" merge/diffbind_$cond.csv
+DIFFBIND(){
+    echo DIFFBIND $(dirname "$1") $3
+    [ -d $(dirname $3) ] || mkdir -p $(dirname $3)
+    local bam sample bamPath peakPath
+    echo "SampleID,Condition,Replicate,bamReads,Peaks,PeakCaller,Tissue,Factor,Treatment,ControlID,bamControl" > $3
+    for bam in $1;do
+        sample=$(echo $bam|sed "s#${1%\**}\|${1#*\*}##g")
+        bamPath=`realpath $bam`
+        peakPath=`realpath ${2%\**}$sample${2#*\*}`
+        [ -s ${2%\**}$sample.bam_peaks.narrowPeak ] || continue  # 跳过没有peak的文件
+        echo "$sample,cond,${sample: -1},$bamPath,$peakPath,macs,,,,," >>$3
+    done
+}
+
+# PEAKS_MATRIX "atac_$cond/peak/*.narrowPeak" "$bam" merge/host_$cond.peaks.matrix
+PEAKS_MATRIX(){
+    [ -s $3 ] && return 0
+    [ -d $(dirname $3) ] || mkdir $(dirname $3) -p
+    cat $1 | bedtools sort | bedtools merge > $3.row.bed
+    ls $2 | sed "s#${2%\**}\|${2#*\*}##g" > $3.col.samples
+    bedtools multicov -bams `ls $2` -bed $3.row.bed > $3
+}
+
+# MERGE_PROJ dir1 dir2 outdir
+# 注意末尾没有空行的文件用cat连接会导致下一个文件首行不会另取一行。
+MERGE_PROJ(){
+    local f
+    [ -d $3 ] || mkdir $3/merge -p
+    for f in `ls $1/{sample.rename.group.csv,merge/{fq.map.xls,kraken2.*.xls,merge.bowtie2.microbes.coverage.xls}}`;do
+        sed '1d' $f | cat ${f/$1\//$2\/} - > ${f/$1\//$3\/}
+    done
+    cp $1/merge/kraken2.*.taxon.xls $3/merge/
+}
+
+# CELLRANGER_COUNT atac/rna fq/sc bowtie2/host hg38/mm39 $threads
+# 宿主ref还需要调整
+CELLRANGER_COUNT(){
+    echo CELLRANGER_COUNT $1 $2 $3
+    local sp
+    [ -d $3 ] || mkdir $3 -p
+    for sp in `find $2/* -type d`;do
+        [ -d $3/$(basename $sp) ] && continue
+        [ -s $3/$(basename $sp).log ] && continue
+        [ $1 == 'rna' ] && ~/software/cellranger-7.1.0/cellranger count \
+            --transcriptome=$HOME/software/refdata-gex-GRCh38-2020-A \
+            --id=$(basename $sp) --fastqs=$sp --sample=$(basename $sp) --maxjobs $5 >$3/$(basename $sp).log
+        [ $1 == 'atac' ] && ~/software/cellranger-atac-2.1.0/cellranger-atac count \
+            --reference=$HOME/software/refdata-cellranger-arc-GRCh38-2020-A-2.0.0 \
+            --id=$(basename $sp) --fastqs=$sp --sample=$(basename $sp) --maxjobs $5 >$3/$(basename $sp).log
+        mv $(basename $sp) $3
+    done
+}
+# https://www.10xgenomics.com/support
+# 10X ATAC
+# https://zhuanlan.zhihu.com/p/563699865
+# 10X RNA
+# https://zhuanlan.zhihu.com/p/279819163
+# https://mp.weixin.qq.com/s?__biz=MzAxMDkxODM1Ng==&mid=2247496813&idx=1&sn=4151bf2265618eff4e0123722c50e569&chksm=9b4bb4d6ac3c3dc0cc422f59ce0326e08c7106e82330e32c46501ec881e84949028221d86af0&scene=21#wechat_redirect
+# bamtofastq用法：
+# https://zhuanlan.zhihu.com/p/536519876
+# http://www.360doc.com/content/21/0715/15/76149697_986667804.shtml
+
+# 从单细胞分析结果中提取barcode和readsID信息
+# SUMMARY_SC_BAM "$bam" "merge/*.readsCount_barcode" $threads count
+SUMMARY_SC_BAM(){
+    echo SUMMARY_SC_BAM $(dirname "$1") $(dirname "$2")
+    local bam sample out f
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    for bam in `ls $1`;do
+        sample=$(echo $bam|sed "s#${1%\**}\|${1#*\*}##g")
+        out=${2%\**}$sample${2#*\*}
+        [ -e $out.gz ] && continue
+        [ -e $out.raw.gz ] || samtools view -@ $3 $bam |cut -f1,12-|gzip -f >$out.raw.gz
+        zcat $out.raw.gz|split -l500000 -d -a 4 - tmp_$sample.
+        [ -e /tmp/fd11 ]||mkfifo /tmp/fd11;exec 9<>/tmp/fd11
+            rm /tmp/fd11;for ((i=1;i<=$3;i++));do echo >&9; done
+        for f in `ls tmp_$sample.*`;do
+        read -u9
+        {
+            sed -re 's#(^[^\t]*)\t.*\tCR:Z:([^\t]*)\t.*CB:Z:([^\t]*).*#\1\t\3#' \
+            -re 's#(^[^\t]*)\t.*\tCR:Z:([^\t]*).*#\1\tNA#' $f|sort -u >$f.tmp
+            echo >&9
+        }&
+        done
+        wait;exec 9<&-;exec 9>&-
+        cat tmp_$sample.*.tmp | sort -k2r -k1 -u >$out
+        if [ $4 ] && [ $4 == count ];then
+            [ -e $out.beforecount.gz ] || (mv $out $out.beforecount && gzip -f $out.beforecount)
+            zcat $out.beforecount.gz|cut -f2| uniq -c | sed -e 's#^ *##' -e 's# #\t#' >$out
+        fi
+        rm tmp_$sample.*; gzip -f $out
+    done
+}
+
+# https://gatk.broadinstitute.org/hc/en-us/articles/360035535932-Germline-short-variant-discovery-SNPs-Indels-
+# GATK_CALL_SNP "XXX*.bam" "XXX*out" ref.fna threads
+GATK_CALL_SNP(){
+    echo GATK_CALL_SNP $(dirname "$1")
+    local bam sample out genomeName
+    [ -d $(dirname "$2") ] || mkdir $(dirname "$2") -p
+    for bam in `ls $1`;do
+        sample=$(echo $bam|sed "s#${1%\**}\|${1#*\*}##g")
+        out=${2%\**}$sample${2#*\*}
+        # add ReadGroup ID
+        samtools addreplacerg -@ $4 -w -r "@RG\tID:$sample\tSM:$sample" -o $bam.bam $bam && \
+            mv $bam.bam $bam && samtools index $bam -@ $4
+        # variants calling，gatk需要参考序列的dict文件，fai文件
+        [ -f $3.fai ] || samtools faidx $3
+        [ -f ${3%\.*}.dict ] || samtools dict $3 -o ${3%\.*}.dict
+        [ -s $out.g.vcf ] || ~/software/gatk-4.4.0.0/gatk --java-options "-Xmx4g" HaplotypeCaller \
+            -R $3 -I $bam -O $out.g.vcf -ERC GVCF --sample-name $sample 2>&1 >$out.log
+    done
+    # combine vcf
+    out=$(dirname "$2")/combine
+    ~/software/gatk-4.4.0.0/gatk CombineGVCFs -R $3 $(ls $(dirname "$2")/*.g.vcf|sed 's#^#-V #g') -O $out.g.vcf
+    # ~/software/gatk-4.4.0.0/gatk --java-options "-Xmx4g  -Xms4g" GenomicsDBImport \
+    #     --genomicsdb-workspace-path my_database -L 20
+    # extract GenoType
+    [ -s $out.vcf ] || ~/software/gatk-4.4.0.0/gatk --java-options "-Xmx4g" GenotypeGVCFs \
+        -R $3 -V $out.g.vcf -O $out.vcf 2>&1 >$out.log
+    # Mark SNPs below quality thresholds
+    [ -s $out.marked.vcf ] || ~/software/gatk-4.4.0.0/gatk VariantFiltration -V $out.vcf  \
+        --filter-expression "QD<2.00" --filter-name "QD2" \
+        --filter-expression "FS>60.00" --filter-name "FS60" \
+        --filter-expression "SOR>3.00" --filter-name "SOR3" \
+        --filter-expression "MQ<40.00" --filter-name "MQ40" \
+        --filter-expression "MQRankSum<-12.50" --filter-name "MQRankSum-12.5" \
+        --filter-expression "ReadPosRankSum<-5.00" --filter-name "ReadPosRankSum-5" \
+        -O $out.marked.vcf 2>&1 >>$out.log
+    # Remove variants below quality thresholds
+    [ -s $out.filtered.SNPs.vcf ] || ~/software/gatk-4.4.0.0/gatk SelectVariants -V $out.marked.vcf \
+        --exclude-filtered --select-type-to-include SNP -O $out.filtered.SNPs.vcf 2>&1 >>$out.log
+    # Remove variants below quality thresholds
+    [ -s $out.filtered.INDELs.vcf ] || ~/software/gatk-4.4.0.0/gatk SelectVariants -V $out.marked.vcf \
+        --exclude-filtered --select-type-to-include INDEL -O $out.filtered.INDELs.vcf 2>&1 >>$out.log
+    # Merge filtered SNPs and indels
+    [ -s $out.filtered.vcf ] || ~/software/gatk-4.4.0.0/gatk MergeVcfs \
+        -I $out.filtered.SNPs.vcf -I $out.filtered.INDELs.vcf -O $out.filtered.vcf 2>&1 >>$out.log
+    # auto Annotate variations by snpEff
+    # 1.get snpEff genomeName
+    [ -s ~/script/snpEffDb.txt ] || snpEff databases > ~/script/snpEffDB.txt
+    genomeName=$(grep -i $(basename $3|sed -e 's/^GCF\|^GCA/gca/' -e 's/\..*//') ~/script/snpEffDB.txt |cut -f1)
+    [ "$genomeName" == '' ] && return 0
+    # 2.modify chromosomes in vcf files
+    snpEff $genomeName -v $out.filtered.vcf -noStats 2>&1 | \
+        awk '/^\# Chromosomes/,/\#-----/{gsub("'\''","",$2);print $2"\t"$3}'|sed -ne '2,3p' >snpEff.chr.length
+    awk '/^>/{if (l!="") print l; printf substr($1,2)"\t"; l=0; next}{l+=length($0)}END{print l}' $3| \
+        awk 'NR==FNR{a[$2]=$1}NR!=FNR{$2=a[$2];print "s#^"$1"#"$2"#"}' snpEff.chr.length - > sed.script
+    cat $out.filtered.vcf | sed -f sed.script >$out.filtered.newChr.vcf
+    # 3.annotate SNPs and INDELS
+    snpEff $genomeName -v $out.filtered.newChr.vcf -s $out.summary.html >$out.filtered.ann.vcf 2>>$out.log
+    rm snpEff.chr.length sed.script
+    # vcf格式转为ped/map格式，再转bed/bim/fam格式
+    # https://zhuanlan.zhihu.com/p/356927396
+    # https://cloud.tencent.com/developer/article/1720656
+    # https://www.jianshu.com/p/c0a032a8e7d5
+    vcftools --vcf $out.filtered.vcf --plink --out $out >>$out.log
+    plink --file $out --make-bed --out $out >>$out.log
+}
+
+# EXTRACT_SAMPLE dir1 dir2 sample
+EXTRACT_SAMPLE(){
+    shopt -s globstar
+    tree -fid --noreport $1 | sed "s#$1#$2#" | xargs mkdir -p
+    ls $1/**/$3* | sed -r "s#($1(.*))#mv \1 $2\2#" | bash
+}
+
+# MERGE_BDG sample.group 
+MERGE_BDG(){
+    bedtools unionbedg -i ${1/%bam/bdg}|awk 'BEGIN{FS=OFS="\t"}{
+        for (i=4;i<=NF;++i) L+=$i;print $1,$2,$3,L/(NF-3);L=0}' >$2
+}
+
+# SCBAM "*.bam" $threads
+SCBAMQC(){
+    echo BAMQC
+    local bam
+    for bam in `ls $1`;do
+        # Step 1: 过滤proper pair 0x2 且MAPQ≥30的reads，删掉被标记为PCR重复的0x400，解析CIGAR过滤匹配长度≥30
+        samtools view -@ $t -h -f 0x2 -F 0x400 -q 30 $bam | \
+            awk 'BEGIN{OFS="\t"}/^@/ {print; next}
+                {cigar=$6;m_sum=0; while(match(cigar, /([0-9]+)M/)) {   # 正则匹配所有"M"操作
+                        m_sum += substr(cigar, RSTART, RLENGTH-1);      # 累加匹配长度
+                        cigar = substr(cigar, RSTART + RLENGTH);        # 截断已处理部分
+                    }
+                if(m_sum >= 30) print $0;}' | samtools view -@ $t -b -o $bam.1.tmp.bam -
+        # Step 2: 对filtered.bam做name排序
+        samtools sort -@ $t -n -o $bam.2.tmp.bam $bam.1.tmp.bam
+        # Step 3: fixmate (需要name排序的bam作为输入)，这里要注意，因为前面对Cigar值进行筛选过，导致有些reads只剩下一端被留下，所以fixmate后会出现单端匹配的reads，后续要删除掉
+        samtools fixmate -@ $t -m $bam.2.tmp.bam $bam.3.tmp.bam
+        # Step 4: coordinate排序 fixmate.bam
+        samtools view -@ $t -h -f 0x2 $bam.3.tmp.bam |samtools sort -@ $t -o $bam.4.tmp.bam
+        # Step 5: 再次去重，加barcode识别，需要先按坐标排序
+        samtools markdup -@ $t -r --barcode-tag CB:Z $bam.4.tmp.bam ${bam%%.bam}.filter.bam
+        # Step 6: 删除中间文件
+        rm $bam.{1..4}}.tmp.bam
+        # 将被筛除的条目生成bam文件，可以用于合并入unmap的bam文件中
+        samtools view -@ $t $bam | cut -f1 | awk '!seen[$1]++' > $bam.original_names
+        samtools view -@ $t ${bam%%.bam}.filter.bam | cut -f1 | awk '!seen[$1]++' > $bam.filter_names
+        awk 'NR==FNR {filtered[$1]; next} !($1 in filtered)' $bam.original_names $bam.filter_names > $bam.filtered_out_names
+        samtools view -@ $t -h -N $bam.filtered_out_names $bam -o ${bam%%.bam}.filtered_out.bam
+    done
+}
+
+
+# PIPELINE
+# CELLRANGER atac/rna hg38/mm39 $threads
+CELLRANGER(){
+    local bam
+    echo cellRanger flagstat bam2fq fastp
+    CELLRANGER_COUNT $1 fq/sc bowtie2/host $2 $3
+    [ $1 == 'rna' ] && bam="bowtie2/host/*/outs/possorted_genome_bam.bam"
+    [ $1 == 'atac' ] && bam="bowtie2/host/*/outs/possorted_bam.bam"
+    BAM_FLAGSTAT "$bam" merge/fq.map.xls $3
+    # SCBAMQC "bam" $3; BAM2FQ "${bam%%.bam}.filtered_out.bam" all "fq/unmap/raw/*" $3  # 需要对cellranger的bam进行二次过滤时
+    BAM2FQ "$bam" unmap "fq/unmap/raw/*" $3
+    # 有时候cellranger的bam文件会出现reads长度为0的情况，需要对空行填充-，否则后续fastp会报错
+    for fq in `ls fq/unmap/raw/*.gz`;do zcat $fq | sed 's#^$#-#' | gzip > $fq.tmp && mv $fq.tmp $fq; done
+    FASTP fq/unmap/raw fq/unmap .1.gz .gz merge/unmapfq.fastp.xls $3
+}
+
+# RNA $rsemIndex/$host bowtie2/star $rsemMap/host $peFq1suffix $seFqsuffix $fna $gff $threads
+RNA(){
+    FASTP fq/raw fq/fastp $4 $5 merge/fq.fastp.xls $8
+    RSEM fq/fastp $3 .1.gz .gz $1 $2 $6 $7 merge/fq.RSEM.map.xls merge/geneExpression $8
+    BAM_FLAGSTAT "$3/*.genome.bam" merge/fq.RSEM.map.xls $8
+    BAM2FQ "$3/*.transcript.bam" unmap "fq/unmap/*" $8 && rm fq/unmap/*.bam
+}
+
+# MAPHOST $hostIndex $threads fq/bam $peFq1suffix $seFqsuffix
+MAPHOST(){
+    echo fastp bowtie2 bam2fq
+    if [ $3 == 'fq' ];then
+        FASTP fq/raw fq/fastp $4 $5 merge/fq.fastp.xls $2
+        BOWTIE2 fq/fastp "bowtie2/host/*.bam" .1.gz .gz $1 merge/fq.map.xls $2
+        BAM2FQ "bowtie2/host/*.bam" unmap "fq/unmap/*" $2 && rm fq/unmap/*.bam
+    elif [ $3 == 'bam' ];then
+        BAM_FLAGSTAT "bowtie2/host/*.bam" merge/fq.map.xls $2
+        BAM2FQ "bowtie2/host/*.bam" unmap "fq/raw/*" $2
+        # BAM2FQ "bowtie2/host/*.bam" all "fq/fastp/*" $2
+        FASTP fq/raw fq/fastp .1.gz .gz merge/unmapfq.fastp.xls $2
+        BOWTIE2 fq/fastp "bowtie2/unmapTohost/*.bam" .1.gz .gz $1 merge/unmapfq.map.xls $2
+        BAM2FQ "bowtie2/unmapTohost/*.bam" unmap "fq/unmap/*" $2 && rm fq/unmap/*.bam
+    fi
+}
+
+# CLASSIFY "${kk2DBlist[*]}" $threads metaphlan ~/databases/metaphlan/mpa_vJun23_CHOCOPhlAnSGB_202403
+CLASSIFY(){
+    local k2db
+    for k2db in $1;do name=$(basename $k2db)
+        echo kraken2分类细菌 $(basename $k2db)
+        EXTRACT_KRAKEN2_SPECIESTREE $k2db merge/kraken2.$(basename $k2db).taxon.xls
+        KRAKEN2 fq/unmap "kraken2/$(basename $k2db)/*" .1.gz .gz $k2db \
+            merge/kraken2.$(basename $k2db).xls $2
+    done
+    [ "$3" == metaphlan ] && METAPHLAN fq/unmap "metaphlan/$(basename $4)/*" .1.gz .gz \
+        $4 merge/metaphlan.$(basename $4).xls $2
+}
+
+# SUMMARY_SC_K2OUT atac/rna "kraken2/hg38_ABVF/*.k2out" $host threads Domain 'Bacteria'
+SUMMARY_SC_K2OUT(){
+    echo SUMMARY_SC_K2OUT $(dirname "$2")
+    local k2out sample k2db
+    [ $1 == 'rna' ] && bam="bowtie2/host/*/outs/possorted_genome_bam.bam"
+    [ $1 == 'atac' ] && bam="bowtie2/host/*/outs/possorted_bam.bam"
+    echo summary single cell bam
+    SUMMARY_SC_BAM "$bam" "merge/*.readsCount_barcode" $4 count
+    SUMMARY_SC_BAM "fq/unmap/raw/*.bam" "merge/*.unmapReadID_barcode" $4 && rm fq/unmap/raw/*.bam
+    k2db=$(basename $(dirname "$2"))
+    for k2out in `ls $2`;do
+        sample=$(basename ${k2out/%.k2out/})
+        [ -s $k2out.readID_txID.gz ] || (sed -r 's#^[^\t]\t([^\t]*)\t.*\(taxid ([0-9]*)\).*#\1\t\2#' \
+            $k2out > $k2out.readID_txID && gzip -f $k2out.readID_txID)
+        # scATAC:filtered_peak_bc_matrix, scRNA:filtered_feature_bc_matrix
+        ~/software/miniforge3/envs/r/bin/Rscript scripts/single_cell_bacteria.r sample.rename.group.csv \
+            merge/$sample.readsCount_barcode.gz $k2out.readID_txID.gz merge/kraken2.$k2db.taxon.xls \
+            bowtie2/host/$sample/outs/filtered_*_bc_matrix/barcodes.tsv.gz singlecell/microbes "$5" "$6"
+    done
+    [ $1 == 'atac' ] && ~/software/miniforge3/envs/r/bin/Rscript scripts/ArchR.r \
+        sample.rename.group.csv bowtie2/host $3 $4 singlecell/microbes $k2db "$5" "$6"
+    [ $1 == 'rna' ] && ~/software/miniforge3/envs/r/bin/Rscript scripts/Seurat.r \
+        sample.rename.group.csv bowtie2/host singlecell/microbes $k2db "$5" "$6"
+}
+
+# COVERAGE "${microbeIndexes[*]}" "${microbeGffs[*]}" "${kk2DBlist[*]}" $threads reads_weighting/GenBank
+COVERAGE_INTERSECT(){
+    echo COVERAGE_COMPUTE
+    local idxs idx gffs gff n sp bam itbam k2db name
+    idxs=($1); gffs=($2)
+    for n in ${!idxs[@]};do
+        idx=${idxs[n]}; sp=$(basename ${idxs[n]})
+        echo 计算coverage $sp
+        if [ ! ${gffs[n]} ]; then gff=${idx}; else gff=${gffs[n]};fi
+        bam="bowtie2/microbes-intersect-none/$sp/*.bam"
+        BOWTIE2 fq/unmap "$bam" .1.gz .gz $idx /dev/null $4 un
+        COMPUTE_COVERAGE $gff "$bam" merge/coverage.$sp.intersect.none.xls $(($4/2)) $5
+        BAM2BDG_RPB "$bam" "$bam.RPB.bdg" merge/fq.fastp.xls $(($4/2))
+        for k2db in $3;do name=$(basename $k2db)
+            echo 取交集  $name
+            itbam="bowtie2/microbes-intersect-$name/$sp/*.bam"
+            EXTRACT_BAM_RESULT $sp merge/kraken2.$name.taxon.xls \
+                "kraken2/$name/*.k2out" "$bam" "$itbam" $4 && \
+            COMPUTE_COVERAGE $gff "$itbam" merge/coverage.$sp.intersect.$name.xls $(($4/2)) $5 && \
+            BAM2BDG_RPB "$itbam" "$itbam.RPB.bdg" merge/fq.fastp.xls $(($4/2))
+        done
+    done
+    echo 整理coverage结果
+    MERGE_COVERAGE "merge/coverage.*.xls" merge/merge.coverage.xls
+    rm merge/coverage.*.xls
+}
+
+# ATAC filter/unfilter $picard $gtf $gsize $threads
+ATAC(){
+    local bam bw
+    chrM_RATE "bowtie2/atac/*.bam" merge/atac.chrMRatio.xls $5
+    # EST_LIB_COMPLEX "bowtie2/atac/*.bam" bowtie2/atac $2 $5
+    if [ $1 == filter ];then
+        BAM_F2Q30_chrM "bowtie2/atac/*.bam" atac_$1/f2q30chrM $5
+        MARK_DUPLICATE "atac_$1/f2q30chrM/*.bam" atac_$1/finalbam $2 $5
+        # BAM_STAT "atac_$cond/markdup/*.bam" merge/atac.filterStat.xls $5
+    elif [ $1 == unfilter ];then
+        mkdir atac_$1/finalbam -p && ln -f bowtie2/atac/*.bam{,.bai} atac_$1/finalbam/
+    fi
+    bam="atac_$1/finalbam/*.bam"
+    bw="atac_$1/bw/*.bam.RPKM.bw"
+    MACS2CALLPEAK "$bam" atac_$1/peak $4 merge/atac.peakCounts.xls
+    # 如果第6个参数为空，则进行ATAC质控步骤；如果是noQC，则跳过质控步骤
+    if [ ! $6 ];then
+        # 这里librarysize直接从markdup的结果中整理，TSSscore从fragqc结果中整理
+        DUPRATE_EST_LIB_SIZE "$bam.out" merge/atac.dupRate_estimatedLibrarySize.xls
+        BAM2BW "$bam" "$bw" RPKM $5
+        ATACFRAGQC "bowtie2/atac/*.bam" $3 merge/atac.tssScore.unfilter.xls $5
+        ATACFRAGQC "$bam" $3 merge/atac.tssScore.xls $5
+        # TSS_ENRICH "$bam" $3 atac_$1/TSS merge/atac.tssScore.xls $(($5/2))
+        awk 'BEGIN{FS=OFS="\t"} ARGIND==1 && FNR>1{t[$1]=$3} ARGIND==2{els[$1]=(FNR==1)?$2:$2;dpr[$1]=$3}
+            ARGIND==3{tss[$1]=$2} ARGIND==4{pkc[$1]=$2} ARGIND==5{$2=els[$1];$3=dpr[$1];$5=tss[$1];$6=pkc[$1];print $0}' \
+            merge/fq.map.xls merge/atac.{dupRate_estimatedLibrarySize,tssScore,peakCounts,chrMRatio}.xls > merge/atac.QC.xls
+        # INSERTSIZE "$bam" atac_$1/insertSize $2 $5
+        # CALLPEAK_PLOT $5 "$bw" "atac_$1/peak/*.bam_peaks.narrowPeak"
+    elif [ $6 == 'noQC' ];then
+        echo pass QC
+    fi
+    DIFFBIND "$bam" "atac_$1/peak/*.bam_peaks.xls" merge/diffbind_$1.csv
+    # PEAKS_MATRIX "atac_$1/peak/*.narrowPeak" "$bam" merge/atac_$1.peaks.matrix
+}
+
+# GENERATE_RESULT "xls kraken2 coverage deseq2 atac diffbind enrich motif" $threads $genome $gtf $orgDb $organism
+GENERATE_RESULT(){
+    local xls name sp kk2 group samples bdgs i all j bw
+    mkdir result -p
+    cp sample.rename.group.csv result/
+    if true || echo $1|grep -q 'xls';then
+        echo GENERATE_RESULT fq.fastp.xls fq.map.xls
+        for xls in `ls merge/*.{fastp,map}.xls`;do
+            awk 'BEGIN{FS="\t|,";OFS="\t"}NR==1{print $0}NR==FNR{a[$1]=$0} \
+                NR!=FNR && FNR>1{line=a[$1];if(length(line)>0)
+                    sub(/^[^\t]+\t/, $2 "\t", line);print line}' \
+            $xls sample.rename.group.csv > result/$(basename $xls)
+        done
+    fi
+    if echo $1|grep -q 'kraken2';then
+        echo GENERATE_RESULT microbes kraken2
+        for name in `ls kraken2`; do
+            # [ -d result/microbes/$kk2DB_name ] || \
+            ~/software/miniforge3/envs/r/bin/Rscript scripts/bacterialReads.r \
+                sample.rename.group.csv merge/fq.fastp.xls \
+                merge/kraken2.$name.taxon.xls merge/kraken2.$name.xls* \
+                result/microbes/$name
+        done
+        # 这部分是整理singlecell的结果
+        ls merge/*.{pdf,group.xls} | sed -r 's#(.*/)([^\.]*)(\..*)#\1,\2,\3#' | \
+            awk 'BEGIN{FS=","}NR==FNR{a[$1]=$2}NR!=FNR{
+                print "mv "$1""$2""$3" result/microbes/"a[$2]""$3}' \
+                sample.rename.group.csv - | bash
+    fi
+    if echo $1|grep -q 'coverage';then
+        echo GENERATE_RESULT microbes coverage
+        # [ -d result/microbes/coverage ] || \
+        ~/software/miniforge3/envs/r/bin/Rscript scripts/cover_geneBiotype.r \
+            sample.rename.group.csv merge/fq.map.xls \
+            merge/merge.coverage.xls result/microbes/coverage
+        echo microbe coverage bedgraph
+        mkdir -p result/microbes/coverage/IGV
+        for sp in `cut -f1 merge/merge.coverage.xls | \
+            sed -e '1d' -e 's/ /_/g' | sort -u`; do
+        for kk2 in `ls bowtie2/microbes-* -d`; do
+            kk2=${kk2#bowtie2/microbes-}
+            [ -d result/microbes/coverage/IGV/$sp/$kk2 ] || mkdir result/microbes/coverage/IGV/$sp/$kk2 -p
+        for group in `cut -d, -f3 sample.rename.group.csv | sed '1d' | sort -u`; do
+            samples=`awk -v g=$group '{FS=",";if($3==g)print $1"."}' sample.rename.group.csv`
+            bdgs=(`ls bowtie2/microbes-*/$sp/*RPB.bdg | grep $kk2/$sp | grep "$samples"`)
+            echo ${bdgs[@]}
+            # 将bdg文件的值按group相加起来，再取平均值
+            ((${#bdgs[@]}<2)) || [ -s result/microbes/coverage/IGV/$sp/$kk2/merge.$group.bdg ] || \
+                bedtools unionbedg -i ${bdgs[@]}|awk 'BEGIN{FS=OFS="\t"}{
+                for (i=4;i<=NF;++i) L+=$i;print $1,$2,$3,L/(NF-3);L=0}' \
+                >result/microbes/coverage/IGV/$sp/$kk2/$group.merge.bdg
+            ((${#bdgs[@]}>0)) && ls ${bdgs[@]} | \
+                sed -r 's#(.*/)([^\.]*)(\..*)#\1,\2,\3#' | \
+                awk -v nd=result/microbes/coverage/IGV/$sp/$kk2 'NR==FNR{FS=",";a[$1]=$2}
+                    NR!=FNR{print "ln -f "$1""$2""$3" "nd"/"a[$2]".bdg"}' \
+                sample.rename.group.csv - | bash
+        done
+        done
+        done
+    fi
+    if echo $1|grep -q 'deseq2';then
+        for f in deseq2_group*.csv; do
+            echo GENERATE_RESULT $f DESeq2
+            ~/software/miniforge3/envs/r/bin/Rscript scripts/DESeq2.r $f \
+                merge/geneExpression.counts.txt result/rna_differentialAnalysis/$f $5 $6
+        done
+    fi
+    for i in `ls atac_* -d|sed 's#atac_##'`;do
+    if echo $1|grep -q 'atac';then
+        echo GENERATE_RESULT atac_$i
+        rm -r result/atac_$i/{bw,fragQC}       # ,peak
+        mkdir -p result/atac_$i/{bw,fragQC}    # ,peak  CALLPEAK_PLOT关闭后，不需要peak结果了
+        ls atac_$i/{bw/*.bw,peak/*heatmap.pdf} | \
+            sed -r 's#(.*/)([^\.]*)(\..*)#\1,\2,\3#' | \
+            awk 'BEGIN{FS=","}NR==FNR{a[$1]=$2}NR!=FNR{t=$3;sub(".*\\.",".",t);
+                print "ln -f "$1""$2""$3" result/"$1""a[$2]""t}' \
+                sample.rename.group.csv - | bash
+        ls atac_$i/finalbam/*_qc.png | \
+            sed -r 's#(.*/)(.*)(_qc.png)#\1,\2,\3#' | \
+            awk 'BEGIN{FS=","}NR==FNR{a[$1]=$2}NR!=FNR{t=$3;
+                sub(".*\\.",".",t);d=$1;sub("finalbam","fragQC",d);
+                print "ln -f "$1""$2""$3" result/"d""a[$2]""t}' \
+                sample.rename.group.csv - | bash
+        ls bowtie2/atac/*_qc.png | \
+            sed -r 's#(.*/)(.*)(_qc.png)#\1,\2,\3#' | \
+            awk 'BEGIN{FS=","}NR==FNR{a[$1]=$2}NR!=FNR{t=$3;
+                sub(".*\\.",".unfilter.",t);d="atac_filter/fragQC/";
+                print "ln -f "$1""$2""$3" result/"d""a[$2]""t}' \
+                sample.rename.group.csv - | bash
+        # rm -r result/atac_$i/{insertSize,bw,peak,TSS}
+        # mkdir -p result/atac_$i/{insertSize,bw,peak,TSS}
+        # ls atac_$i/{bw/*.bw,insertSize/*.pdf,peak/*heatmap.pdf,TSS/*.pdf} | \
+        #     sed -r 's#(.*/)([^\.]*)(\..*)#\1,\2,\3#' | \
+        #     awk 'BEGIN{FS=","}NR==FNR{a[$1]=$2}NR!=FNR{t=$3;sub(".*\\.",".",t);
+        #         print "ln -f "$1""$2""$3" result/"$1""a[$2]""t}' \
+        #         sample.rename.group.csv - | bash
+        for xls in `ls merge/atac.{filterStat,QC}.xls`;do
+            awk 'BEGIN{FS="\t|,";OFS="\t"}NR==FNR{a[$1]=$2}NR!=FNR && FNR==1{print $0} \
+                NR!=FNR && FNR>1{$1=a[$1];if(length($1)>0)print $0}' \
+                sample.rename.group.csv $xls > result/atac_$i/$(basename $xls)
+        done
+    fi
+    if echo $1|grep -q 'diffbind';then
+        for f in diffbind_$i*.csv; do
+            projdir=result/atac_$i/peak_differentialAnalysis/$f
+            echo GENERATE_RESULT $f Diffbind
+            ~/software/miniforge3/envs/r/bin/Rscript scripts/DiffBind.r $f $projdir $2
+            if echo $1|grep -q 'enrich';then enrich=enrich; fi
+            echo GENERATE_RESULT $f peakAnnotate $enrich
+            ~/software/miniforge3/envs/r/bin/Rscript scripts/peakAnnotate.r \
+                "`ls $projdir/*/diff_peaks.xls`" $4 $5 $6 $enrich
+            if echo $1|grep -q 'motif';then
+                echo GENERATE_RESULT $f all MergePeaks plotHeatmap
+                # [ -s $projdir/all/$f.merge.up.bed ] && [ -s $projdir/all/$f.merge.down.bed ] && PEAK_PLOT reference-point $2 \
+                #     $projdir/all/diffpeaks/peaks "result/atac_$i/bw/*.bw" "$projdir/all/$f.merge.up.bed $projdir/all/$f.merge.down.bed"
+                # [ -s $projdir/all/$f.merge.up.bed ] && PEAK_PLOT reference-point $2 \
+                #     $projdir/all/diffpeaks/peaks.up "result/atac_$i/bw/*.bw" "$projdir/all/$f.merge.up.bed"
+                # [ -s $projdir/all/$f.merge.down.bed ] && PEAK_PLOT reference-point $2 \
+                #     $projdir/all/diffpeaks/peaks.down "result/atac_$i/bw/*.bw" "$projdir/all/$f.merge.down.bed"
+                zcat $projdir/all/RAW_READS.peak_counts.xls.gz | cut -f1-3 | \
+                    awk 'BEGIN{FS=OFS="\t"}NR>1{$2=$2-1;print $0}' > $projdir/all/bg.bed
+                for j in `ls -d $projdir/*-vs-*`;do
+                    echo GENERATE_RESULT $f $(basename $j) plotHeatmap
+                    bw=$(awk -v d=result/atac_$i/bw/ -v t=$(basename ${j%-vs-*}) -v c=${j#*-vs-} \
+                        'BEGIN{FS=","}$3==c{printf d""$2".bw "}$3==t{printf d""$2".bw "}' sample.rename.group.csv)
+                    [ -s $j/up.bed ] && [ -s $j/down.bed ] && \
+                        PEAK_PLOT reference-point $2 $j/diffpeaks/peaks "$bw" "$j/up.bed $j/down.bed"
+                    # [ -s $j/up.bed ] && PEAK_PLOT reference-point $2 $j/diffpeaks/peaks "$bw" "$j/up.bed"
+                    # [ -s $j/down.bed ] && PEAK_PLOT reference-point $2 $j/diffpeaks/peaks "$bw" "$j/down.bed"
+                    echo GENERATE_RESULT $f $(basename $j) MotifFinding
+                    [ -d $j/Motif_up -o -s $j/up.bed ] && findMotifsGenome.pl $j/up.bed $3 $j/Motif_up/ -p $2 
+                    [ -d $j/Motif_down -o -s $j/down.bed ] && findMotifsGenome.pl $j/down.bed $3 $j/Motif_down/ -p $2
+                    [ -d $j/Motif_up_bg -o -s $j/up.bed ] && findMotifsGenome.pl $j/up.bed $3 $j/Motif_up_bg/ \
+                        -bg $projdir/all/bg.bed -p $2 
+                    [ -d $j/Motif_down_bg -o -s $j/down.bed ] && findMotifsGenome.pl $j/down.bed $3 $j/Motif_down_bg/ \
+                        -bg $projdir/all/bg.bed -p $2
+                    # annotatePeaks.pl up.bed $3 -gtf ${anot%% *}
+                    # annotatePeaks.pl down.bed $3 -gtf ${anot%% *}
+                done
+            fi
+        done
+    fi
+    done
+}
