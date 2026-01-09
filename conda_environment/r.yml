@@ -1,1 +1,48 @@
+name: r
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - bioconductor-atacseqqc
+  - bioconductor-biovizbase
+  - bioconductor-bsgenome.mmusculus.ucsc.mm10
+  - bioconductor-chipseeker
+  - bioconductor-clusterprofiler
+  - bioconductor-diffbind
+  - bioconductor-ensdb.mmusculus.v79
+  - bioconductor-genomicfeatures
+  - bioconductor-glmgampoi
+  - bioconductor-monocle
+  - bioconductor-org.hs.eg.db
+  - bioconductor-pathview
+  - bioconductor-tximport
+  - presto
+  - r-cairo
+  - r-clustree
+  - r-devtools
+  - r-ggpmisc
+  - r-ggpubr
+  - r-ggrepel
+  - r-ggsci
+  - r-harmony
+  - r-hdf5r
+  - r-httpgd
+  - r-irkernel
+  - r-languageserver
+  - r-pheatmap
+  - r-qqman
+  - r-qualv
+  - r-recommended
+  - r-remotes
+  - r-scales
+  - r-seurat
+  - r-signac=1.14.0
+  - r-stringdist
+  - r-stringr
+  - r-systemfonts
+  - r-tidyverse
+  - r-vegan
+  - sinto
+  - umap-learn
 
+prefix: "/home/maqing4.lab/software/miniforge3/envs/r"
