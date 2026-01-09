@@ -1,1 +1,39 @@
+name: default
+channels:
+  - agbiome
+  - bioconda
+  - conda-forge
+dependencies:
+  - bedops
+  - bedtools=2.30.0
+  - bowtie2=2.4.5
+  - ca-certificates
+  - cdhit
+  - certifi
+  - deeptools=3.5.1
+  - diamond
+  - eggnog-mapper
+  - fastp=0.23.2
+  - homer
+  - humann
+  - jq
+  - kraken2=2.1.2
+  - macs2=2.2.7.1
+  - megahit
+  - metaphlan
+  - openssl
+  - plink
+  - prodigal
+  - rsem
+  - samtools=1.15
+  - seqkit
+  - snpeff
+  - spades
+  - star
+  - tree
+  - vcftools
+  - pip:
+    - ATACFragQC==0.4.7
+    - Cython==3.1.2
 
+prefix: "/home/maqing4.lab/software/miniforge3/envs/default"
